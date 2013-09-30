@@ -1,0 +1,142 @@
+diff --git a/commentaccess.module b/commentaccess.module
+index 48ed58c..376e2cd 100644
+--- a/commentaccess.module
++++ b/commentaccess.module
+@@ -45,6 +45,34 @@ function commentaccess_menu_alter(&$items) {
+   $items['comment/%/approve']['access arguments'] = array(1, 'approve');
+   $items['comment/%/delete']['access callback'] = 'commentaccess_access_check';
+   $items['comment/%/delete']['access arguments'] = array(1, 'delete');
++
++  $items['admin/content/comment']['access arguments'] = array('access the comment overview page');
++  $items['admin/content/comment']['access callback'] = 'commentaccess_menu_access';
++  $items['admin/content/comment/new']['access arguments'] = array('access the comment overview page');
++  $items['admin/content/comment/new']['access callback'] = 'commentaccess_menu_access';
++  $items['admin/content/comment/approval']['access arguments'] = array('access the comment overview page');
++  $items['admin/content/comment/approval']['access callback'] = 'commentaccess_menu_access';
++}
++
++/**
++ * Workaournd to make admin/content/comment page accessible
++ * @return bool
++ */
++function commentaccess_menu_access() {
++  return user_access('access the comment overview page');
++}
++
++/**
++ * hook_module_implements_alter
++ * @param $implementations
++ * @param $hook
++ */
++function commentaccess_module_implements_alter(&$implementations, $hook) {
++  if ($hook == 'hook_menu_alter') {
++    $var = $implementations['commentaccess'];
++    unset($implementations['commentaccess']);
++    $implementations['commentaccess'] = $var;
++  }
+ }
+ 
+ /**
+@@ -54,9 +82,29 @@ function commentaccess_menu_alter(&$items) {
+ function commentaccess_permission() {
+   $perms = array();
+ 
++  $perms += array(
++    "access the comment overview page" => array(
++      'title' => t('Access the comment overview page'),
++    ),
++  );
+   foreach (node_type_get_types() as $node) {
+     $type = check_plain($node->type);
+     $perms += array(
++      "administer comments on any $type" => array(
++        'title' => t('%type: Administer comments on any content', array('%type' => $node->name)),
++      ),
++    );
++    $perms += array(
++      "approve comments on any $type" => array(
++        'title' => t('%type: Approve comments on any content', array('%type' => $node->name)),
++      ),
++    );
++    $perms += array(
++      "delete comments on any $type" => array(
++        'title' => t('%type: Delete comments on any content', array('%type' => $node->name)),
++      ),
++    );
++    $perms += array(
+       "administer comments on own $type" => array(
+         'title' => t('%type: Administer comments on own content', array('%type' => $node->name)),
+       ),
+@@ -212,7 +260,7 @@ function commentaccess_node_view($node, $view_mode) {
+   // add comments only if we are on the node page, in "full" view mode
+   if ($node->comment && $view_mode == 'full' && node_is_page($node) && empty($node->in_preview)) {
+     if (empty($node->content['comments']['comments']) && $node->comment_count == 0) {
+-      if ($node->uid == $user->uid && (user_access("approve comments on own $node->type") || user_access("administer comments on own $node->type"))) {
++      if (($node->uid == $user->uid && (user_access("approve comments on own $node->type") || user_access("administer comments on own $node->type"))) || (user_access("approve comments on any $node->type") || user_access("administer comments on any $node->type"))) {
+         // there are no published comments, but this user has permissions to
+         // work with unpublished comments. So we run the same code as
+         // comment_node_page_additions() to add the comment thread.
+@@ -241,8 +289,9 @@ function commentaccess_node_view($node, $view_mode) {
+ function commentaccess_query_comment_filter_alter(QueryAlterableInterface $query) {
+   global $user;
+   $node = $query->getMetaData('node');
+-  if (isset($node) && $node->uid == $user->uid
+-    && (user_access("approve comments on own $node->type") || user_access("administer comments on own $node->type"))) {
++  if (isset($node) && ($node->uid == $user->uid
++    && (user_access("approve comments on own $node->type") || user_access("administer comments on own $node->type"))
++    || (user_access("approve comments on any $node->type") || user_access("administer comments on any $node->type")))) {
+     $conditions =& $query->conditions();
+     foreach ($conditions as $key => &$condition) {
+       if ($condition['field'] == 'c.status' && $condition['value'] == COMMENT_PUBLISHED) {
+@@ -263,7 +312,7 @@ function commentaccess_form_alter(&$form, $form_state, $form_id) {
+     $type = $form['type']['#value'];
+ 
+     if ($type . '_node_form' == $form_id) {
+-      $form['comment_settings']['#access'] |= ($user->uid == $form['#node']->uid && user_access("administer comments on own $type"));
++      $form['comment_settings']['#access'] |= (($user->uid == $form['#node']->uid && user_access("administer comments on own $type")) || user_access("administer comments on any $type"));
+     }
+   }
+ }
+@@ -293,7 +342,7 @@ function commentaccess_form_user_profile_form_alter(&$form, &$form_state) {
+     foreach (node_type_get_types() as $node) {
+       $type = $node->type;
+       if (node_access('create', $type)) {
+-        if (user_access("approve comments on own $type") || user_access("administer comments on own $type")) {
++        if (user_access("approve comments on own $type") || user_access("administer comments on own $type") || user_access("approve comments on any $type") || user_access("administer comments on any $type")) {
+           $form['commentaccess_settings']["commentaccess_skip_$type"] = array(
+             '#type' => 'checkbox',
+             '#title' => t("$node->name: skip comment approvals"),
+@@ -399,10 +448,10 @@ function commentaccess_access_check($comment, $op = '') {
+       if (user_access('administer comments')) {
+         return TRUE;
+       }
+-      elseif (user_access("administer comments on own $node->type") && ($user->uid == $node->uid)) {
++      elseif ((user_access("administer comments on own $node->type") && ($user->uid == $node->uid)) || user_access("administer comments on any $node->type")) {
+         return TRUE;
+       }
+-      elseif (user_access("delete comments on own $node->type") && ($user->uid == $node->uid)) {
++      elseif ((user_access("delete comments on own $node->type") && ($user->uid == $node->uid)) || user_access("delete comments on any $node->type")) {
+         return TRUE;
+       }
+       break;
+@@ -415,10 +464,10 @@ function commentaccess_access_check($comment, $op = '') {
+         if (user_access('administer comments')) {
+           return TRUE;
+         }
+-        elseif (user_access("administer comments on own $node->type") && ($user->uid == $node->uid)) {
++        elseif ((user_access("administer comments on own $node->type") && ($user->uid == $node->uid)) || user_access("administer comments on any $node->type")) {
+           return TRUE;
+         }
+-        elseif (user_access("approve comments on own $node->type") && ($user->uid == $node->uid)) {
++        elseif ((user_access("approve comments on own $node->type") && ($user->uid == $node->uid)) || user_access("approve comments on any $node->type")) {
+           return TRUE;
+         }
+       }
+@@ -460,6 +509,7 @@ function commentaccess_requires_approval($comment) {
+ 
+   // Check if the owner has administer or approval access for this node type.
+   if (!user_access('administer comments on own ' . $node->type, $owner) &&
++    !user_access('administer comments on any ' . $node->type, $owner) &&
+     !user_access('approve comments on own ' . $node->type, $owner)
+   ) {
+     // No access: use general comment rules.
